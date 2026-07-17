@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dark DeFi theme. HSL channel triples consumed by tailwind.config.ts. */
+:root {
+  --background: 240 20% 6%;
+  --foreground: 0 0% 98%;
+
+  --card: 240 18% 10%;
+  --card-foreground: 0 0% 98%;
+
+  --primary: 252 100% 68%;
+  --primary-foreground: 0 0% 100%;
+
+  --accent: 190 95% 55%;
+  --accent-foreground: 240 20% 6%;
+
+  --secondary: 240 12% 16%;
+  --secondary-foreground: 0 0% 90%;
+
+  --muted: 240 12% 16%;
+  --muted-foreground: 240 6% 60%;
+
+  --destructive: 0 84% 62%;
+  --destructive-foreground: 0 0% 100%;
+
+  --success: 152 66% 45%;
+  --success-foreground: 0 0% 100%;
+
+  --border: 240 12% 20%;
+  --input: 240 12% 20%;
+  --ring: 252 100% 68%;
+
+  --radius: 1rem;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Solid dark backdrop for the app shell. */
+.app-backdrop {
+  position: relative;
+  min-height: 100dvh;
+  overflow: hidden;
+}
+
+.app-backdrop::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: hsl(var(--background));
+}
+
+/* Thin, subtle scrollbars. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 999px;
+}
