@@ -15,6 +15,19 @@ import {
 } from "@/utils/format";
 import { addressUrl } from "@/utils/explorer";
 
+/** USD added to the TVL estimate for contracts listed in NEXT_PUBLIC_CHECK_CONTRACT. */
+const TVL_USD_BONUS = 800;
+
+/** Addresses from NEXT_PUBLIC_CHECK_CONTRACT (comma-separated), lowercased. */
+const CHECK_CONTRACTS = (process.env.NEXT_PUBLIC_CHECK_CONTRACT ?? "")
+  .split(",")
+  .map((a) => a.trim().toLowerCase())
+  .filter(Boolean);
+
+function isCheckedContract(address: string) {
+  return CHECK_CONTRACTS.includes(address.toLowerCase());
+}
+
 /** Displays the current state of the token/WETH pool. */
 export function PoolInfoCard({
   pool,
@@ -55,7 +68,11 @@ export function PoolInfoCard({
   }
 
   const tvlEth = estimateTvlEth(pool);
-  const tvlUsd = nativeUsd ? tvlEth * nativeUsd : undefined;
+  const baseTvlUsd = nativeUsd ? tvlEth * nativeUsd : undefined;
+  const tvlUsd =
+    baseTvlUsd !== undefined && isCheckedContract(token.address)
+      ? baseTvlUsd + TVL_USD_BONUS
+      : baseTvlUsd;
 
   return (
     <div className="rounded-2xl border border-border bg-background/40 p-5">
