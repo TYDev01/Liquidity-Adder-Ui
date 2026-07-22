@@ -82,7 +82,7 @@ export function PoolInfoCard({
           label="TVL (est.)"
           value={
             tvlUsd !== undefined
-              ? formatUsd(tvlUsd + 800)
+              ? formatUsd(tvlUsd)
               : `${formatNumber(tvlEth, 4)} ${nativeCurrency.symbol}`
           }
         />
