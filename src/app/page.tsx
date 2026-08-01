@@ -1,4 +1,4 @@
-import { LiquidityManager } from "@/features/liquidity/LiquidityManager";
+import { EcosystemManager } from "@/features/ecosystem/EcosystemManager";
 import { APP_NAME } from "@/constants/app";
 
 export default function HomePage() {
@@ -9,12 +9,12 @@ export default function HomePage() {
           {APP_NAME}
         </h1>
         <p className="mx-auto mt-3 max-w-md text-sm text-muted-foreground sm:text-base">
-          Paste any ERC-20 token address to create, add or remove Uniswap V2
-          liquidity — no contracts to deploy, just your wallet.
+          Paste a token address to create, add or remove liquidity — on Uniswap
+          V2 across EVM chains, or Raydium, Orca and Meteora on Solana.
         </p>
       </section>
 
-      <LiquidityManager />
+      <EcosystemManager />
 
       <footer className="mt-12 text-center text-xs text-muted-foreground">
         <p>
