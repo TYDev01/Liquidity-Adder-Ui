@@ -7,7 +7,9 @@ import {
   getMint,
   getAccount,
   getAssociatedTokenAddressSync,
+  getExtensionTypes,
   getTransferFeeConfig,
+  ExtensionType,
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   type Mint,
@@ -95,6 +97,20 @@ async function readMint(
     throw new Error(
       "This address is a token account or program state, not a mint. Paste the mint address.",
     );
+  }
+}
+
+/**
+ * Names of the Token-2022 extensions a mint carries. AMM programs accept only
+ * a small set of these, so the list decides which venues can host the token.
+ */
+function readExtensions(mint: Mint): string[] {
+  try {
+    return getExtensionTypes(mint.tlvData).map(
+      (type) => ExtensionType[type] ?? `Unknown (${type})`,
+    );
+  } catch {
+    return [];
   }
 }
 
@@ -273,6 +289,7 @@ export async function fetchSolanaTokenInfo(
     : null;
 
   return {
+    extensions: isToken2022 ? readExtensions(mint) : undefined,
     mint: base58,
     name: meta.name ?? `Unknown token ${base58.slice(0, 4)}`,
     symbol: meta.symbol ?? base58.slice(0, 4).toUpperCase(),

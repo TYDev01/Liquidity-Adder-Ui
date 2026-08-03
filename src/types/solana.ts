@@ -35,6 +35,11 @@ export interface SolanaTokenInfo {
   /** True for Token-2022 mints (different program id, may carry extensions). */
   isToken2022: boolean;
   /**
+   * Names of the Token-2022 extensions on the mint. AMM programs accept only a
+   * short whitelist, so this decides which venues can host the token at all.
+   */
+  extensions?: string[];
+  /**
    * Token-2022 transfer-fee basis points, when the mint charges one. Deposits
    * into an AMM are transfers, so a fee here silently reduces what lands in
    * the pool — the UI warns when this is set.

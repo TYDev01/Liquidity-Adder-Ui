@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { ArrowLeft } from "lucide-react";
+import { useConnection } from "@solana/wallet-adapter-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { StatRow } from "@/components/ui/stat-row";
@@ -15,6 +16,11 @@ import {
   type SolanaPlatformId,
 } from "@/constants/solana";
 import { useSolanaLiquidityActions } from "@/hooks/useSolanaLiquidity";
+import {
+  findUnsupportedMint,
+  unsupportedMintMessage,
+  type UnsupportedMint,
+} from "@/services/solana/mintSupport";
 import { useSettingsStore } from "@/features/liquidity/settingsStore";
 import { orderMints, toBaseUnits, toUiAmount } from "@/services/solana/adapters/shared";
 import { formatNumber } from "@/utils/format";
@@ -43,6 +49,29 @@ export function SolanaCreatePoolForm({
   const config = getPlatformConfig(platform);
   const slippagePercent = useSettingsStore((s) => s.slippagePercent);
   const actions = useSolanaLiquidityActions(platform);
+  const { connection } = useConnection();
+
+  // Whether the venue's program will accept these mints at all. Checked here
+  // rather than at submit time so the user isn't asked to sign a doomed
+  // transaction — Token-2022 extensions are rejected on-chain, not refunded.
+  const [blockedMint, setBlockedMint] = React.useState<UnsupportedMint>();
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setBlockedMint(undefined);
+
+    findUnsupportedMint(connection, platform, [token, quoteAsset])
+      .then((blocked) => {
+        if (!cancelled) setBlockedMint(blocked);
+      })
+      // A failed lookup must not block a pool the venue would have accepted;
+      // the adapter re-checks before building.
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, platform, token, quoteAsset]);
 
   const [tokenText, setTokenText] = React.useState("");
   const [quoteText, setQuoteText] = React.useState("");
@@ -70,7 +99,8 @@ export function SolanaCreatePoolForm({
     tokenAmount <= 0n ||
     quoteAmount <= 0n ||
     insufficientToken ||
-    insufficientQuote;
+    insufficientQuote ||
+    blockedMint !== undefined;
 
   async function submit() {
     // Pools key on a canonical mint ordering, which may reverse the sides the
@@ -106,6 +136,12 @@ export function SolanaCreatePoolForm({
   return (
     <div className="space-y-4">
       <BackButton onClick={onBack} />
+
+      {blockedMint && (
+        <Alert tone="danger" title={`${config.name} can't host ${blockedMint.symbol}`}>
+          {unsupportedMintMessage(platform, blockedMint)}
+        </Alert>
+      )}
 
       <Alert tone="warning" title="You're setting the opening price">
         No {token.symbol}/{quoteAsset.symbol} pool exists on {config.name}. The

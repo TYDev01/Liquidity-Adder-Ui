@@ -48,6 +48,12 @@ const PROGRAM_ERROR_HINTS: Array<{ match: RegExp; title: string; message: string
       "The price range isn't valid for this pool's tick spacing. Widen the range and try again.",
   },
   {
+    match: /NotSupportMint|not support token_2022 mint extension|0x1777\b/i,
+    title: "Token not supported here",
+    message:
+      "This mint's Token-2022 extensions aren't accepted by the venue's program on new pools. Try a venue that supports the extension, or an existing pool.",
+  },
+  {
     match: /frozen|AccountFrozen/i,
     title: "Token account frozen",
     message:

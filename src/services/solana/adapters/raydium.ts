@@ -42,6 +42,8 @@ import {
   uiPriceToTick,
 } from "./shared";
 import { fetchTokenBalance } from "../tokenService";
+import { findUnsupportedMint, unsupportedMintMessage } from "../mintSupport";
+import type { SolanaPlatformId } from "@/constants/solana";
 
 /**
  * Raydium adapters — CPMM (constant product) and CLMM (concentrated).
@@ -303,6 +305,8 @@ export const raydiumCpmmAdapter: LiquidityAdapter = {
     const { tokenA, tokenB, amountA, amountB, tierKey } = params;
     const raydium = await getClient(ctx);
 
+    await assertMintsSupported(ctx, "raydium-cpmm", [tokenA, tokenB]);
+
     // Fee tiers are on-chain config accounts; pick the one the user selected.
     const configs = await raydium.api.getCpmmConfigs();
     const feeConfig = configs[tierKey] ?? configs[0];
@@ -321,6 +325,10 @@ export const raydiumCpmmAdapter: LiquidityAdapter = {
       feeConfig,
       associatedOnly: false,
       ownerInfo: { useSOLBalance: true },
+      // Passes the `support_mint` registry accounts when they exist. Without
+      // them the program rejects any Token-2022 mint it hasn't built in
+      // support for, with a bare `NotSupportMint`.
+      addSupportMintExt: true,
       txVersion: TX_VERSION,
     });
 
@@ -595,6 +603,8 @@ export const raydiumClmmAdapter: LiquidityAdapter = {
     const { tokenA, tokenB, amountA, amountB, tierKey } = params;
     const raydium = await getClient(ctx);
 
+    await assertMintsSupported(ctx, "raydium-clmm", [tokenA, tokenB]);
+
     const configs = await raydium.api.getClmmConfigs();
     const ammConfig = configs.find((c) => c.tickSpacing === tierKey) ?? configs[0];
     if (!ammConfig) {
@@ -624,6 +634,7 @@ export const raydiumClmmAdapter: LiquidityAdapter = {
         description: "",
       },
       initialPrice,
+      addSupportMintExt: true,
       txVersion: TX_VERSION,
     });
 
@@ -633,6 +644,21 @@ export const raydiumClmmAdapter: LiquidityAdapter = {
     };
   },
 };
+
+/**
+ * Fail before the wallet prompt when a mint's Token-2022 extensions rule the
+ * venue out — the program's own rejection is an opaque `NotSupportMint`.
+ */
+async function assertMintsSupported(
+  ctx: AdapterContext,
+  platform: SolanaPlatformId,
+  tokens: SolanaTokenInfo[],
+): Promise<void> {
+  const blocked = await findUnsupportedMint(ctx.connection, platform, tokens);
+  if (blocked) {
+    throw new Error(unsupportedMintMessage(platform, blocked));
+  }
+}
 
 /**
  * Turn a user price band into spacing-aligned ticks, defaulting to the widest
