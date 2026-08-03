@@ -81,6 +81,17 @@ export function SolanaTransactionStatus({
                 </p>
               )}
 
+              {isError && error?.details && (
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
+                    Program logs
+                  </summary>
+                  <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-background/60 p-2 text-[10px] leading-relaxed text-muted-foreground">
+                    {error.details}
+                  </pre>
+                </details>
+              )}
+
               {!isError && totalSteps > 1 && (
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   Step {Math.min(step, totalSteps)} of {totalSteps}

@@ -153,8 +153,12 @@ export function useSolanaTransactionRunner(): SolanaRunnerState {
           : await connection.simulateTransaction(first);
 
         if (simulation.value.err) {
+          // The error enum names the failing instruction and program code —
+          // keep it in the message, since the logs alone often don't.
           throw Object.assign(
-            new Error("Transaction simulation failed"),
+            new Error(
+              `Transaction simulation failed: ${JSON.stringify(simulation.value.err)}`,
+            ),
             { logs: simulation.value.logs ?? [] },
           );
         }
@@ -211,6 +215,9 @@ export function useSolanaTransactionRunner(): SolanaRunnerState {
         setStage("confirmed");
         return sent;
       } catch (err) {
+        // Program logs are the only real diagnostic on Solana; never swallow
+        // them, even when the friendly mapping is confident.
+        console.error("[solana] transaction failed", err);
         const friendly = parseSolanaError(err);
         setError(friendly);
         setStage(friendly.isUserRejection ? "idle" : "failed");

@@ -60,12 +60,31 @@ const PROGRAM_ERROR_HINTS: Array<{ match: RegExp; title: string; message: string
       "This Token-2022 mint charges a transfer fee, so less arrives than you sent. Increase slippage.",
   },
   {
-    match: /computational budget|exceeded CUs|compute units/i,
+    // Deliberately narrow: the ubiquitous "consumed N of M compute units" log
+    // line is *not* a failure, so matching on "compute units" alone would
+    // mislabel almost every failed transaction.
+    match:
+      /exceeded CUs meter|computational budget exceeded|ComputationalBudgetExceeded|exceeded maximum number of instructions/i,
+    title: "Out of compute budget",
+    message:
+      "The transaction ran out of compute units. Try a narrower price range or fewer bins.",
+  },
+  {
+    match:
+      /transaction too large|encoded.*too large|exceeds (the )?(maximum )?(transaction )?size|too many account/i,
     title: "Transaction too large",
     message:
-      "The transaction ran out of compute budget. Try a narrower price range or fewer bins.",
+      "The transaction exceeds Solana's 1232-byte limit. Try a narrower price range or fewer bins.",
   },
 ];
+
+/**
+ * Log lines every transaction emits regardless of outcome. They must be kept
+ * out of the text the hints match against, or unrelated failures get labelled
+ * by whichever hint happens to collide with the boilerplate.
+ */
+const NOISE_LOG =
+  /^Program \S+ (invoke \[\d+\]|success|consumed \d+ of \d+ compute units)$|^Program (data|return):/i;
 
 /** Wallet-adapter rejection errors, which carry distinctive names. */
 function isUserRejection(error: unknown): boolean {
@@ -81,13 +100,20 @@ function isUserRejection(error: unknown): boolean {
 }
 
 /** Pull the program logs off a `SendTransactionError`, when present. */
-function extractLogs(error: unknown): string {
-  if (typeof error !== "object" || error === null) return "";
+function extractLogs(error: unknown): string[] {
+  if (typeof error !== "object" || error === null) return [];
   const logs = (error as { logs?: unknown }).logs;
-  if (Array.isArray(logs)) return logs.join("\n");
+  if (Array.isArray(logs)) return logs.filter((l): l is string => typeof l === "string");
   const transactionLogs = (error as { transactionLogs?: unknown }).transactionLogs;
-  if (Array.isArray(transactionLogs)) return transactionLogs.join("\n");
-  return "";
+  if (Array.isArray(transactionLogs)) {
+    return transactionLogs.filter((l): l is string => typeof l === "string");
+  }
+  return [];
+}
+
+/** The log lines that actually say something about why a transaction failed. */
+function signalLogs(logs: string[]): string[] {
+  return logs.filter((line) => !NOISE_LOG.test(line.trim()));
 }
 
 export function parseSolanaError(error: unknown): FriendlyError {
@@ -105,7 +131,14 @@ export function parseSolanaError(error: unknown): FriendlyError {
       : typeof error === "string"
         ? error
         : "";
-  const haystack = `${message}\n${extractLogs(error)}`;
+  const logs = extractLogs(error);
+  const signal = signalLogs(logs);
+  // Only the message and the meaningful log lines drive classification — see
+  // `NOISE_LOG`.
+  const haystack = `${message}\n${signal.join("\n")}`;
+  // Raw logs are the only way to diagnose an unmapped program error, so they
+  // ride along on the friendly error for the UI to reveal on demand.
+  const details = logs.length > 0 ? logs.join("\n") : undefined;
 
   for (const hint of PROGRAM_ERROR_HINTS) {
     if (hint.match.test(haystack)) {
@@ -113,6 +146,7 @@ export function parseSolanaError(error: unknown): FriendlyError {
         title: hint.title,
         message: hint.message,
         isUserRejection: false,
+        details,
       };
     }
   }
@@ -134,16 +168,35 @@ export function parseSolanaError(error: unknown): FriendlyError {
   if (/simulation failed|Transaction simulation failed/i.test(haystack)) {
     return {
       title: "Simulation failed",
+      // Surface the program's own words: an unmapped failure is far more
+      // actionable as "Error: insufficient funds" than as a generic sentence.
       message:
+        programReason(signal) ||
         message.replace(/^.*simulation failed:?\s*/i, "") ||
         "The transaction would fail on-chain. Check your amounts and balances.",
       isUserRejection: false,
+      details,
     };
   }
 
   return {
     title: "Transaction failed",
-    message: message || "The network rejected the transaction.",
+    message: programReason(signal) || message || "The network rejected the transaction.",
     isUserRejection: false,
+    details,
   };
+}
+
+/**
+ * The most specific failure line the program emitted — an explicit error log
+ * where there is one, otherwise the "Program … failed" line carrying the code.
+ */
+function programReason(signal: string[]): string {
+  const explicit = signal.find((line) =>
+    /Program log: (Error|AnchorError|.*failed)|^Allocate:|already in use/i.test(line),
+  );
+  if (explicit) return explicit.replace(/^Program log:\s*/i, "");
+
+  const failure = signal.find((line) => /failed: /i.test(line));
+  return failure ? failure.replace(/^Program \S+ /i, "Program ") : "";
 }

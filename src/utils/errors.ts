@@ -15,6 +15,8 @@ export interface FriendlyError {
   message: string;
   /** True for user-initiated cancellations (not real failures). */
   isUserRejection: boolean;
+  /** Raw diagnostic text (Solana program logs), shown behind a disclosure. */
+  details?: string;
 }
 
 const REVERT_HINTS: Array<{ match: RegExp; message: string }> = [
