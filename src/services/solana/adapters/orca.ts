@@ -16,9 +16,11 @@ import {
   PDAUtil,
   TokenExtensionUtil,
   ORCA_WHIRLPOOL_PROGRAM_ID,
+  type Position,
   type Whirlpool,
   type WhirlpoolClient,
 } from "@orca-so/whirlpools-sdk";
+import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import type {
   AdapterContext,
   AddParams,
@@ -26,6 +28,7 @@ import type {
   CreatePoolParams,
   FindPoolsParams,
   LiquidityAdapter,
+  OwnerContext,
   QuoteAddParams,
   ReadContext,
   RemoveParams,
@@ -34,9 +37,10 @@ import type {
   SolanaPoolSummary,
   SolanaPosition,
   SolanaRemoveQuote,
+  SolanaWalletPosition,
 } from "@/types/solana";
 import { ORCA_WHIRLPOOLS_CONFIG } from "@/constants/solana";
-import { fetchOrcaPools } from "./orcaApi";
+import { fetchOrcaPools, fetchOrcaPoolsByIds } from "./orcaApi";
 import { fullRangeTicks, snapToSpacing, uiPriceToTick } from "./shared";
 
 /**
@@ -210,6 +214,56 @@ export const orcaWhirlpoolAdapter: LiquidityAdapter = {
       tierKey: data.tickSpacing,
       positions,
     };
+  },
+
+  async findOwnerPositions(ctx: OwnerContext): Promise<SolanaWalletPosition[]> {
+    const client = getClient(ctx);
+
+    const candidates = await ownerPositionAddresses(ctx.connection, ctx.owner);
+    if (candidates.length === 0) return [];
+
+    const found = Object.values(await client.getPositions(candidates)).filter(
+      (position): position is Position =>
+        position !== null && !position.getData().liquidity.isZero(),
+    );
+    if (found.length === 0) return [];
+
+    // One API lookup for pool metadata, one RPC batch for the live ticks that
+    // decide whether each position is earning fees.
+    const poolIds = [
+      ...new Set(found.map((p) => p.getData().whirlpool.toBase58())),
+    ];
+    const [summaries, whirlpools] = await Promise.all([
+      fetchOrcaPoolsByIds(poolIds),
+      client.getPools(poolIds),
+    ]);
+
+    const currentTicks = new Map<string, number>();
+    for (const whirlpool of whirlpools) {
+      currentTicks.set(
+        whirlpool.getAddress().toBase58(),
+        whirlpool.getData().tickCurrentIndex,
+      );
+    }
+
+    const positions: SolanaWalletPosition[] = [];
+    for (const position of found) {
+      const poolId = position.getData().whirlpool.toBase58();
+      const pool = summaries.get(poolId);
+      if (!pool) continue;
+
+      positions.push({
+        pool,
+        position: toPosition(
+          position,
+          currentTicks.get(poolId) ?? 0,
+          pool.decimalsA,
+          pool.decimalsB,
+        ),
+      });
+    }
+
+    return positions;
   },
 
   async quoteAdd(
@@ -478,6 +532,78 @@ export const orcaWhirlpoolAdapter: LiquidityAdapter = {
 };
 
 /** Read the connected wallet's positions in one pool. */
+/**
+ * Position PDAs for every position NFT the owner holds.
+ *
+ * A Whirlpool position is an NFT, so the wallet's own token accounts are the
+ * index: any balance of exactly 1 with 0 decimals is a candidate, and the
+ * position account is a PDA of its mint. Both token programs are scanned —
+ * newer positions mint under Token-2022.
+ */
+async function ownerPositionAddresses(
+  connection: ReadContext["connection"],
+  owner: PublicKey,
+): Promise<string[]> {
+  const responses = await Promise.allSettled(
+    [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].map((programId) =>
+      connection.getParsedTokenAccountsByOwner(owner, { programId }),
+    ),
+  );
+
+  const addresses: string[] = [];
+  for (const response of responses) {
+    if (response.status !== "fulfilled") continue;
+    for (const { account } of response.value.value) {
+      const info = account.data.parsed?.info;
+      if (info?.tokenAmount?.amount !== "1") continue;
+      if (info?.tokenAmount?.decimals !== 0) continue;
+
+      addresses.push(
+        PDAUtil.getPosition(
+          ORCA_WHIRLPOOL_PROGRAM_ID,
+          new PublicKey(info.mint),
+        ).publicKey.toBase58(),
+      );
+    }
+  }
+
+  return addresses;
+}
+
+/** Map an SDK position onto our shape, given the pool it sits in. */
+function toPosition(
+  position: Position,
+  currentTick: number,
+  decimalsA: number,
+  decimalsB: number,
+): SolanaPosition {
+  const data = position.getData();
+
+  return {
+    id: position.getAddress().toBase58(),
+    liquidity: BigInt(data.liquidity.toString()),
+    // Underlying amounts are derived at withdraw time by the SDK's quote.
+    amountA: 0n,
+    amountB: 0n,
+    lowerTick: data.tickLowerIndex,
+    upperTick: data.tickUpperIndex,
+    lowerPrice: PriceMath.tickIndexToPrice(
+      data.tickLowerIndex,
+      decimalsA,
+      decimalsB,
+    ).toNumber(),
+    upperPrice: PriceMath.tickIndexToPrice(
+      data.tickUpperIndex,
+      decimalsA,
+      decimalsB,
+    ).toNumber(),
+    inRange:
+      currentTick >= data.tickLowerIndex && currentTick <= data.tickUpperIndex,
+    feesA: BigInt(data.feeOwedA.toString()),
+    feesB: BigInt(data.feeOwedB.toString()),
+  };
+}
+
 async function loadOwnerPositions(
   ctx: ReadContext,
   client: WhirlpoolClient,
@@ -488,63 +614,17 @@ async function loadOwnerPositions(
 ): Promise<SolanaPosition[]> {
   if (!ctx.owner) return [];
 
-  // Position NFTs are held in the owner's token accounts; each maps to a
-  // position PDA derived from its mint.
-  const { value: tokenAccounts } =
-    await ctx.connection.getParsedTokenAccountsByOwner(ctx.owner, {
-      programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-    });
-
-  const candidates = tokenAccounts
-    .filter((account) => {
-      const info = account.account.data.parsed?.info;
-      return (
-        info?.tokenAmount?.amount === "1" &&
-        info?.tokenAmount?.decimals === 0
-      );
-    })
-    .map((account) =>
-      PDAUtil.getPosition(
-        ORCA_WHIRLPOOL_PROGRAM_ID,
-        new PublicKey(account.account.data.parsed.info.mint),
-      ).publicKey.toBase58(),
-    );
-
+  const candidates = await ownerPositionAddresses(ctx.connection, ctx.owner);
   if (candidates.length === 0) return [];
 
   const found = await client.getPositions(candidates);
-  const data = pool.getData();
+  const currentTick = pool.getData().tickCurrentIndex;
 
   const positions: SolanaPosition[] = [];
   for (const position of Object.values(found)) {
     if (!position) continue;
-    const positionData = position.getData();
-    if (positionData.whirlpool.toBase58() !== poolId) continue;
-
-    positions.push({
-      id: position.getAddress().toBase58(),
-      liquidity: BigInt(positionData.liquidity.toString()),
-      // Underlying amounts are derived at withdraw time by the SDK's quote.
-      amountA: 0n,
-      amountB: 0n,
-      lowerTick: positionData.tickLowerIndex,
-      upperTick: positionData.tickUpperIndex,
-      lowerPrice: PriceMath.tickIndexToPrice(
-        positionData.tickLowerIndex,
-        decimalsA,
-        decimalsB,
-      ).toNumber(),
-      upperPrice: PriceMath.tickIndexToPrice(
-        positionData.tickUpperIndex,
-        decimalsA,
-        decimalsB,
-      ).toNumber(),
-      inRange:
-        data.tickCurrentIndex >= positionData.tickLowerIndex &&
-        data.tickCurrentIndex <= positionData.tickUpperIndex,
-      feesA: BigInt(positionData.feeOwedA.toString()),
-      feesB: BigInt(positionData.feeOwedB.toString()),
-    });
+    if (position.getData().whirlpool.toBase58() !== poolId) continue;
+    positions.push(toPosition(position, currentTick, decimalsA, decimalsB));
   }
 
   return positions;

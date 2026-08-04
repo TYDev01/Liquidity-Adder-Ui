@@ -125,6 +125,16 @@ export interface SolanaPosition {
   feesB?: bigint;
 }
 
+/**
+ * A position found by scanning the wallet rather than by opening a pool, so it
+ * carries the pool it belongs to. This is what the "your positions" view lists,
+ * and it holds everything needed to jump straight into a withdrawal.
+ */
+export interface SolanaWalletPosition {
+  pool: SolanaPoolSummary;
+  position: SolanaPosition;
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                   Quotes                                   */
 /* -------------------------------------------------------------------------- */
@@ -193,6 +203,12 @@ export interface AdapterContext {
 export interface ReadContext {
   connection: Connection;
   owner?: PublicKey;
+}
+
+/** Read-only context for scans that are meaningless without an owner. */
+export interface OwnerContext {
+  connection: Connection;
+  owner: PublicKey;
 }
 
 export interface FindPoolsParams {
@@ -275,6 +291,12 @@ export interface LiquidityAdapter {
 
   /** Load live state and the owner's positions for one pool. */
   loadPool(ctx: ReadContext, summary: SolanaPoolSummary): Promise<SolanaPoolDetail>;
+
+  /**
+   * Every position the owner holds at this venue, across all pools — the entry
+   * point for withdrawing without knowing which pool you're in.
+   */
+  findOwnerPositions(ctx: OwnerContext): Promise<SolanaWalletPosition[]>;
 
   /** Quote a deposit. Pure computation — no signing. */
   quoteAdd(ctx: ReadContext, params: QuoteAddParams): Promise<SolanaAddQuote>;

@@ -14,6 +14,7 @@ import type {
   CreatePoolParams,
   FindPoolsParams,
   LiquidityAdapter,
+  OwnerContext,
   QuoteAddParams,
   ReadContext,
   RemoveParams,
@@ -22,8 +23,9 @@ import type {
   SolanaPoolSummary,
   SolanaPosition,
   SolanaRemoveQuote,
+  SolanaWalletPosition,
 } from "@/types/solana";
-import { fetchMeteoraDammPools } from "./meteoraApi";
+import { fetchMeteoraDammPools, fetchMeteoraPoolsByIds } from "./meteoraApi";
 import {
   applySlippageDown,
   applySlippageUp,
@@ -112,6 +114,70 @@ export const meteoraDammAdapter: LiquidityAdapter = {
       lpSupply: toBigInt(state.liquidity),
       positions,
     };
+  },
+
+  async findOwnerPositions(ctx: OwnerContext): Promise<SolanaWalletPosition[]> {
+    const cpAmm = getCpAmm(ctx);
+
+    const owned = await cpAmm.getPositionsByUser(ctx.owner);
+    const live = owned.filter(
+      (entry) => !entry.positionState.unlockedLiquidity.isZero(),
+    );
+    if (live.length === 0) return [];
+
+    const poolIds = [
+      ...new Set(live.map((entry) => entry.positionState.pool.toBase58())),
+    ];
+    const [summaries, states] = await Promise.all([
+      fetchMeteoraPoolsByIds("meteora-damm", poolIds),
+      // Withdrawable amounts depend on the pool's current price, so each pool
+      // the wallet has a position in is read once and shared across them.
+      Promise.all(
+        poolIds.map(async (id) => {
+          try {
+            return [id, await cpAmm.fetchPoolState(new PublicKey(id))] as const;
+          } catch {
+            return [id, undefined] as const;
+          }
+        }),
+      ),
+    ]);
+    const stateById = new Map(states);
+
+    const positions: SolanaWalletPosition[] = [];
+    for (const entry of live) {
+      const poolId = entry.positionState.pool.toBase58();
+      const pool = summaries.get(poolId);
+      const state = stateById.get(poolId);
+      if (!pool || !state) continue;
+
+      const liquidity = entry.positionState.unlockedLiquidity;
+      const withdraw = cpAmm.getWithdrawQuote({
+        liquidityDelta: liquidity,
+        minSqrtPrice: state.sqrtMinPrice,
+        maxSqrtPrice: state.sqrtMaxPrice,
+        sqrtPrice: state.sqrtPrice,
+        collectFeeMode: state.collectFeeMode,
+      } as Parameters<typeof cpAmm.getWithdrawQuote>[0]);
+
+      positions.push({
+        pool,
+        position: {
+          id: entry.position.toBase58(),
+          liquidity: toBigInt(liquidity),
+          amountA: toBigInt(withdraw.outAmountA),
+          amountB: toBigInt(withdraw.outAmountB),
+          poolShare: poolShareAfterDeposit(
+            toBigInt(liquidity),
+            toBigInt(state.liquidity) - toBigInt(liquidity),
+          ),
+          feesA: toBigInt(entry.positionState.feeAPending),
+          feesB: toBigInt(entry.positionState.feeBPending),
+        },
+      });
+    }
+
+    return positions;
   },
 
   async quoteAdd(

@@ -20,6 +20,7 @@ import type {
   CreatePoolParams,
   FindPoolsParams,
   LiquidityAdapter,
+  OwnerContext,
   QuoteAddParams,
   ReadContext,
   RemoveParams,
@@ -28,20 +29,26 @@ import type {
   SolanaPoolSummary,
   SolanaPosition,
   SolanaRemoveQuote,
+  SolanaWalletPosition,
 } from "@/types/solana";
 import type { SolanaTokenInfo } from "@/types/solana";
-import { fetchRaydiumPools } from "./raydiumApi";
+import {
+  fetchRaydiumPools,
+  fetchRaydiumPoolsByIds,
+  fetchRaydiumPoolsByLpMints,
+} from "./raydiumApi";
 import {
   applySlippageDown,
   applySlippageUp,
   fullRangeTicks,
+  inRangeForPrice,
   pairedAmount,
   poolShareAfterDeposit,
   snapToSpacing,
   tickToUiPrice,
   uiPriceToTick,
 } from "./shared";
-import { fetchTokenBalance } from "../tokenService";
+import { fetchTokenBalance, fetchTokenBalances } from "../tokenService";
 import { findUnsupportedMint, unsupportedMintMessage } from "../mintSupport";
 import type { SolanaPlatformId } from "@/constants/solana";
 
@@ -186,6 +193,36 @@ export const raydiumCpmmAdapter: LiquidityAdapter = {
       lpSupply,
       positions,
     };
+  },
+
+  async findOwnerPositions(ctx: OwnerContext): Promise<SolanaWalletPosition[]> {
+    // A CPMM position is an LP token balance and nothing else, so discovery
+    // means asking the API which of the wallet's mints are Raydium LP mints.
+    const balances = await fetchTokenBalances(ctx.connection, ctx.owner);
+    if (balances.size === 0) return [];
+
+    const pools = await fetchRaydiumPoolsByLpMints([...balances.keys()]);
+
+    const positions: SolanaWalletPosition[] = [];
+    for (const [lpMint, pool] of pools) {
+      if (pool.platform !== "raydium-cpmm") continue;
+      const liquidity = balances.get(lpMint);
+      if (!liquidity) continue;
+
+      positions.push({
+        pool,
+        position: {
+          id: lpMint,
+          liquidity,
+          // Redeemable amounts need the pool's reserves; `loadPool` fills them
+          // in when the user opens the position.
+          amountA: 0n,
+          amountB: 0n,
+        },
+      });
+    }
+
+    return positions;
   },
 
   async quoteAdd(
@@ -416,6 +453,59 @@ export const raydiumClmmAdapter: LiquidityAdapter = {
       tierKey: tickSpacing,
       positions,
     };
+  },
+
+  async findOwnerPositions(ctx: OwnerContext): Promise<SolanaWalletPosition[]> {
+    const raydium = await getClient(ctx);
+
+    // Every CLMM position the wallet holds, at any pool, in one call.
+    const owned = await raydium.clmm.getOwnerPositionInfo({
+      programId: CLMM_PROGRAM_ID,
+    });
+    const live = owned.filter((position) => !position.liquidity.isZero());
+    if (live.length === 0) return [];
+
+    const pools = await fetchRaydiumPoolsByIds([
+      ...new Set(live.map((position) => position.poolId.toBase58())),
+    ]);
+
+    const positions: SolanaWalletPosition[] = [];
+    for (const position of live) {
+      const pool = pools.get(position.poolId.toBase58());
+      if (!pool) continue;
+
+      positions.push({
+        pool,
+        position: {
+          id: position.nftMint.toBase58(),
+          liquidity: toBigInt(position.liquidity),
+          // Filled in by `loadPool`, which reads the pool's live state.
+          amountA: 0n,
+          amountB: 0n,
+          lowerTick: position.tickLower,
+          upperTick: position.tickUpper,
+          lowerPrice: tickToUiPrice(
+            position.tickLower,
+            pool.decimalsA,
+            pool.decimalsB,
+          ),
+          upperPrice: tickToUiPrice(
+            position.tickUpper,
+            pool.decimalsA,
+            pool.decimalsB,
+          ),
+          inRange: inRangeForPrice(
+            pool.price,
+            position.tickLower,
+            position.tickUpper,
+            pool.decimalsA,
+            pool.decimalsB,
+          ),
+        },
+      });
+    }
+
+    return positions;
   },
 
   async quoteAdd(

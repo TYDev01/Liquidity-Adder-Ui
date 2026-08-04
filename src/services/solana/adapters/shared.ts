@@ -106,6 +106,23 @@ export function uiPriceToTick(
   return clampTick(Math.floor(tick));
 }
 
+/**
+ * Whether a tick band brackets the given price. Used where only the pool's
+ * display price is on hand — position discovery lists many pools at once, and
+ * reading each one's live tick would cost an RPC round-trip per pool.
+ */
+export function inRangeForPrice(
+  price: number,
+  lowerTick: number,
+  upperTick: number,
+  decimalsA: number,
+  decimalsB: number,
+): boolean | undefined {
+  if (!(price > 0)) return undefined;
+  const tick = uiPriceToTick(price, decimalsA, decimalsB);
+  return tick >= lowerTick && tick <= upperTick;
+}
+
 /** Ticks must sit on a multiple of the pool's tick spacing. */
 export function snapToSpacing(tick: number, spacing: number): number {
   return clampTick(Math.round(tick / spacing) * spacing);

@@ -16,6 +16,7 @@ import type {
   CreatePoolParams,
   FindPoolsParams,
   LiquidityAdapter,
+  OwnerContext,
   QuoteAddParams,
   ReadContext,
   RemoveParams,
@@ -24,9 +25,10 @@ import type {
   SolanaPoolSummary,
   SolanaPosition,
   SolanaRemoveQuote,
+  SolanaWalletPosition,
 } from "@/types/solana";
 import { SOLANA_PLATFORMS } from "@/constants/solana";
-import { fetchMeteoraDlmmPools } from "./meteoraApi";
+import { fetchMeteoraDlmmPools, fetchMeteoraPoolsByIds } from "./meteoraApi";
 import { applySlippageDown, applySlippageUp } from "./shared";
 
 /**
@@ -110,6 +112,19 @@ function getBinPrice(binId: number, binStep: number): string {
   return ((1 + binStep / 10_000) ** binId).toString();
 }
 
+/**
+ * A bin's price in display terms (Y per X), without needing a `DLMM` instance.
+ * Same conversion the SDK's `fromPricePerLamport` applies.
+ */
+function binPriceToUi(
+  binId: number,
+  binStep: number,
+  decimalsA: number,
+  decimalsB: number,
+): number {
+  return Number(getBinPrice(binId, binStep)) * 10 ** (decimalsA - decimalsB);
+}
+
 export const meteoraDlmmAdapter: LiquidityAdapter = {
   id: "meteora-dlmm",
 
@@ -150,6 +165,65 @@ export const meteoraDlmmAdapter: LiquidityAdapter = {
       price: Number(activeBin.pricePerToken),
       positions,
     };
+  },
+
+  async findOwnerPositions(ctx: OwnerContext): Promise<SolanaWalletPosition[]> {
+    // The SDK indexes positions by owner across every pair in one pass.
+    const byPair = await DLMM.getAllLbPairPositionsByUser(
+      ctx.connection,
+      ctx.owner,
+      { programId: PROGRAM_ID },
+    );
+    if (byPair.size === 0) return [];
+
+    const summaries = await fetchMeteoraPoolsByIds("meteora-dlmm", [
+      ...byPair.keys(),
+    ]);
+
+    const positions: SolanaWalletPosition[] = [];
+    for (const [pairId, info] of byPair) {
+      const pool = summaries.get(pairId);
+      if (!pool) continue;
+
+      const binStep = info.lbPair.binStep;
+      const activeBinId = info.lbPair.activeId;
+
+      for (const position of info.lbPairPositionsData) {
+        const data = position.positionData;
+        // Positions linger after a full withdrawal until the account is closed.
+        if (data.totalXAmount === "0" && data.totalYAmount === "0") continue;
+
+        positions.push({
+          pool,
+          position: {
+            id: position.publicKey.toBase58(),
+            liquidity: toBigInt(data.totalXAmount),
+            amountA: toBigInt(data.totalXAmount),
+            amountB: toBigInt(data.totalYAmount),
+            lowerTick: data.lowerBinId,
+            upperTick: data.upperBinId,
+            lowerPrice: binPriceToUi(
+              data.lowerBinId,
+              binStep,
+              pool.decimalsA,
+              pool.decimalsB,
+            ),
+            upperPrice: binPriceToUi(
+              data.upperBinId,
+              binStep,
+              pool.decimalsA,
+              pool.decimalsB,
+            ),
+            inRange:
+              activeBinId >= data.lowerBinId && activeBinId <= data.upperBinId,
+            feesA: BigInt(data.feeX.toString()),
+            feesB: BigInt(data.feeY.toString()),
+          },
+        });
+      }
+    }
+
+    return positions;
   },
 
   async quoteAdd(

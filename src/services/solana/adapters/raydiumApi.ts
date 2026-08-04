@@ -128,3 +128,71 @@ export async function fetchRaydiumPoolById(
   const platform = classify(pool);
   return platform ? toSummary(pool, platform) : undefined;
 }
+
+/**
+ * How many ids to put in one query string. Position discovery can turn up
+ * dozens, and the endpoint takes them as a comma-separated list in the URL.
+ */
+const ID_BATCH = 30;
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const batches: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    batches.push(items.slice(i, i + size));
+  }
+  return batches;
+}
+
+/** Fetch many pools by id, keyed by pool id. Missing ids are simply absent. */
+export async function fetchRaydiumPoolsByIds(
+  ids: string[],
+): Promise<Map<string, SolanaPoolSummary>> {
+  return collect(ids, "pools/info/ids", "ids", (pool) => pool.id);
+}
+
+/**
+ * Resolve LP mints to the pools that issued them, keyed by LP mint. This is how
+ * a CPMM position is discovered: the wallet holds LP tokens and nothing else
+ * identifies the pool.
+ */
+export async function fetchRaydiumPoolsByLpMints(
+  lpMints: string[],
+): Promise<Map<string, SolanaPoolSummary>> {
+  return collect(lpMints, "pools/info/lps", "lps", (pool) => pool.lpMint?.address);
+}
+
+/** Shared batching for the two "look these up by id" endpoints. */
+async function collect(
+  values: string[],
+  path: string,
+  param: string,
+  keyOf: (pool: ApiPool) => string | undefined,
+): Promise<Map<string, SolanaPoolSummary>> {
+  const found = new Map<string, SolanaPoolSummary>();
+  if (values.length === 0) return found;
+
+  const batches = await Promise.allSettled(
+    chunk(values, ID_BATCH).map(async (batch) => {
+      const res = await fetch(`${API_BASE}/${path}?${param}=${batch.join(",")}`, {
+        headers: { accept: "application/json" },
+      });
+      if (!res.ok) {
+        throw new Error(`Raydium API returned ${res.status}.`);
+      }
+      return (await res.json()) as ApiEnvelope<(ApiPool | null)[]>;
+    }),
+  );
+
+  for (const batch of batches) {
+    // A failed batch loses those pools, not the whole discovery pass.
+    if (batch.status !== "fulfilled") continue;
+    for (const pool of batch.value.data ?? []) {
+      if (!pool) continue;
+      const platform = classify(pool);
+      const key = keyOf(pool);
+      if (platform && key) found.set(key, toSummary(pool, platform));
+    }
+  }
+
+  return found;
+}

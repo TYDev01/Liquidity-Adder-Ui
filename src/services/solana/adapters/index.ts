@@ -22,6 +22,11 @@ const ADAPTERS: Record<SolanaPlatformId, LiquidityAdapter> = {
   "meteora-damm": meteoraDammAdapter,
 };
 
+/** Every registered adapter, for scans that span all venues. */
+export function allAdapters(): LiquidityAdapter[] {
+  return Object.values(ADAPTERS);
+}
+
 export function getAdapter(platform: SolanaPlatformId): LiquidityAdapter {
   const adapter = ADAPTERS[platform];
   if (!adapter) {

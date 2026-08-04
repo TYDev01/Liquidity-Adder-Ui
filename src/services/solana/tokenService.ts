@@ -236,6 +236,42 @@ export async function fetchTokenBalance(
   }
 }
 
+/**
+ * Every non-zero token balance the owner holds, keyed by mint. Covers both
+ * token programs, since a wallet's positions can be denominated in either.
+ *
+ * One `getTokenAccountsByOwner` call per program is far cheaper than reading
+ * candidate mints individually, which is what position discovery would
+ * otherwise need.
+ */
+export async function fetchTokenBalances(
+  connection: Connection,
+  owner: PublicKey,
+): Promise<Map<string, bigint>> {
+  const balances = new Map<string, bigint>();
+
+  const responses = await Promise.allSettled(
+    [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].map((programId) =>
+      connection.getParsedTokenAccountsByOwner(owner, { programId }),
+    ),
+  );
+
+  for (const response of responses) {
+    if (response.status !== "fulfilled") continue;
+    for (const { account } of response.value.value) {
+      const info = account.data.parsed?.info;
+      const mint = info?.mint;
+      const amount = info?.tokenAmount?.amount;
+      if (typeof mint !== "string" || typeof amount !== "string") continue;
+
+      const value = BigInt(amount);
+      if (value > 0n) balances.set(mint, value);
+    }
+  }
+
+  return balances;
+}
+
 /** Native SOL balance in lamports. */
 export async function fetchSolBalance(
   connection: Connection,

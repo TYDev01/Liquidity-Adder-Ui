@@ -64,6 +64,37 @@ function toSummary(pool: OrcaPool): SolanaPoolSummary {
   };
 }
 
+/**
+ * Fetch Whirlpools by address, keyed by address.
+ *
+ * The list endpoint's `address` filter is ignored when given several values, so
+ * these go one request per pool. Position discovery turns up a handful at most.
+ */
+export async function fetchOrcaPoolsByIds(
+  ids: string[],
+): Promise<Map<string, SolanaPoolSummary>> {
+  const found = new Map<string, SolanaPoolSummary>();
+
+  const results = await Promise.allSettled(
+    ids.map(async (id) => {
+      const res = await fetch(`${API_BASE}/v2/solana/pools/${id}`, {
+        headers: { accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(`Orca API returned ${res.status}.`);
+      const body = (await res.json()) as { data?: OrcaPool };
+      return body.data;
+    }),
+  );
+
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    const pool = result.value;
+    if (pool?.tokenA && pool.tokenB) found.set(pool.address, toSummary(pool));
+  }
+
+  return found;
+}
+
 /** List Whirlpools containing both mints. */
 export async function fetchOrcaPools(
   mint1: string,

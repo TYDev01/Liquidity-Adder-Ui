@@ -13,6 +13,7 @@ import { PoolList } from "./PoolList";
 import { SolanaTokenInfoCard } from "./SolanaTokenInfoCard";
 import { SolanaLiquidityPanel } from "./SolanaLiquidityPanel";
 import { SolanaCreatePoolForm } from "./SolanaCreatePoolForm";
+import { SolanaPositionsPanel } from "./SolanaPositionsPanel";
 import { SolanaRecentTransactions } from "./SolanaRecentTransactions";
 import { useEcosystemStore } from "@/features/ecosystem/store";
 import {
@@ -86,6 +87,10 @@ export function SolanaLiquidityManager() {
 
   return (
     <div className="space-y-5">
+      {/* Withdrawing shouldn't require remembering where you deposited, so the
+          wallet's own positions come before the search-by-mint flow. */}
+      {mounted && connected && <SolanaPositionsPanel />}
+
       <div className="grid gap-4 sm:grid-cols-2">
         <PlatformPicker value={platform} onChange={setPlatform} />
         <QuoteAssetPicker value={quoteMint} onChange={setQuoteMint} />

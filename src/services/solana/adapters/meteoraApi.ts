@@ -122,6 +122,39 @@ async function fetchPools(
     .map((pool) => toSummary(pool, platform));
 }
 
+/**
+ * Fetch pools by address, keyed by address. `query` is a fuzzy match that also
+ * covers the pool address, so an exact-address search returns the one pool.
+ */
+export async function fetchMeteoraPoolsByIds(
+  platform: "meteora-dlmm" | "meteora-damm",
+  ids: string[],
+): Promise<Map<string, SolanaPoolSummary>> {
+  const base = platform === "meteora-dlmm" ? DLMM_API : DAMM_API;
+  const found = new Map<string, SolanaPoolSummary>();
+
+  const results = await Promise.allSettled(
+    ids.map(async (id) => {
+      const res = await fetch(`${base}/pools?query=${id}&page_size=5`, {
+        headers: { accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(`Meteora API returned ${res.status}.`);
+      const body = (await res.json()) as DatapiResponse;
+      return (body.data ?? []).find((pool) => pool.address === id);
+    }),
+  );
+
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    const pool = result.value;
+    if (pool?.token_x && pool.token_y) {
+      found.set(pool.address, toSummary(pool, platform));
+    }
+  }
+
+  return found;
+}
+
 /** List DLMM pairs holding both mints. */
 export function fetchMeteoraDlmmPools(
   mint1: string,

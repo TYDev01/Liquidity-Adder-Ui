@@ -36,19 +36,22 @@ export function SolanaRemoveLiquidityForm({
   pool,
   token,
   quoteAsset,
+  initialPositionId,
   onSuccess,
 }: {
   platform: SolanaPlatformId;
   pool: SolanaPoolDetail;
   token: SolanaTokenInfo;
   quoteAsset: SolanaTokenInfo;
+  /** Preselects one position when the user arrived from the positions list. */
+  initialPositionId?: string;
   onSuccess?: () => void;
 }) {
   const slippagePercent = useSettingsStore((s) => s.slippagePercent);
   const actions = useSolanaLiquidityActions(platform);
 
   const [selectedId, setSelectedId] = React.useState<string | undefined>(
-    pool.positions[0]?.id,
+    initialPositionId ?? pool.positions[0]?.id,
   );
   const [percent, setPercent] = React.useState(100);
 
